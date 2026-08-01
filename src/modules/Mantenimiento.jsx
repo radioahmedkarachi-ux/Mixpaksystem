@@ -48,6 +48,7 @@ import {
   ConfirmDialog,
   StatCard,
   EmptyState,
+  useToast,
 } from "../shared.jsx";
 
 const MACHINE_TYPES = [
@@ -92,6 +93,7 @@ function machineLabel(v) {
 }
 
 export default function Mantenimiento({ user }) {
+  const toast = useToast();
   const [tasks, setTasks] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modalOpen, setModalOpen] = useState(false);
@@ -113,16 +115,27 @@ export default function Mantenimiento({ user }) {
   }, []);
 
   async function updateStatus(task, status) {
-    await updateDoc(doc(db, "tasks", task.id), { status });
-    logActivity(user.email, "Mantenimiento", "Cambio de estado", `${task.workOrder} (${task.title}): ${task.status} → ${status}`);
+    try {
+      await updateDoc(doc(db, "tasks", task.id), { status });
+      logActivity(user.email, "Mantenimiento", "Cambio de estado", `${task.workOrder} (${task.title}): ${task.status} → ${status}`);
+      toast("Estado actualizado.");
+    } catch (err) {
+      toast("No se pudo cambiar el estado.", "error");
+    }
   }
 
   async function removeTask(task) {
     // Nota: las fotos quedan en Cloudinary (borrar requiere un backend con la
     // clave secreta), pero el registro de la tarea sí se elimina.
-    await deleteDoc(doc(db, "tasks", task.id));
-    logActivity(user.email, "Mantenimiento", "Eliminada", `${task.workOrder}: ${task.title}`);
-    setConfirmDelete(null);
+    try {
+      await deleteDoc(doc(db, "tasks", task.id));
+      logActivity(user.email, "Mantenimiento", "Eliminada", `${task.workOrder}: ${task.title}`);
+      toast("Tarea eliminada.");
+    } catch (err) {
+      toast("No se pudo eliminar la tarea.", "error");
+    } finally {
+      setConfirmDelete(null);
+    }
   }
 
   const filtered = useMemo(() => {
@@ -284,6 +297,7 @@ function TaskCard({ task, onStatusChange, onDelete, onOpen }) {
 }
 
 function TaskModal({ user, onClose }) {
+  const toast = useToast();
   const [form, setForm] = useState(emptyForm);
   const [files, setFiles] = useState([]);
   const [previews, setPreviews] = useState([]);
@@ -318,6 +332,7 @@ function TaskModal({ user, onClose }) {
     } catch (err) {
       setSaving(false);
       setError("No se pudo guardar la orden. Revisa tu conexión y las reglas de Firestore.");
+      toast("No se pudo guardar la orden.", "error");
       return;
     }
 
@@ -341,6 +356,7 @@ function TaskModal({ user, onClose }) {
     }
     setSaving(false);
     setUploadStatus("");
+    toast("Orden guardada.");
     onClose();
   }
 
