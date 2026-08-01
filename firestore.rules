@@ -1,0 +1,53 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function myTeamDoc() {
+      return get(/databases/$(database)/documents/team/$(request.auth.uid));
+    }
+    function isApproved() {
+      return isSignedIn() && myTeamDoc().data.aprobado == true;
+    }
+    function isAdmin() {
+      return isSignedIn() && myTeamDoc().data.role == "admin" && myTeamDoc().data.aprobado == true;
+    }
+
+    match /team/{userId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && request.auth.uid == userId && request.resource.data.aprobado == false;
+      // Un admin puede tocar cualquier cosa (aprobar, cambiar rol de cualquiera).
+      // Una persona sobre su propio documento puede:
+      //  - cambiar de categoría libremente, MIENTRAS quede pendiente (aprobado=false)
+      //    o no toque el campo aprobado (para no perder su aprobación ya dada)
+      //  - pero nunca puede auto-asignarse el rol "admin", ni auto-aprobarse
+      //    (pasar aprobado de false a true) — eso solo lo hace un admin.
+      allow update: if isAdmin() || (
+        isSignedIn() && request.auth.uid == userId &&
+        request.resource.data.role != "admin" &&
+        (request.resource.data.aprobado == false || request.resource.data.aprobado == resource.data.aprobado)
+      );
+      allow delete: if isAdmin();
+    }
+
+    match /tasks/{taskId} {
+      allow read, write: if isApproved();
+    }
+    match /materials/{materialId} {
+      allow read, write: if isApproved();
+    }
+    match /production_orders/{orderId} {
+      allow read, write: if isApproved();
+    }
+    match /quality_issues/{issueId} {
+      allow read, write: if isApproved();
+    }
+    // Historial de cambios: cualquiera aprobado puede escribir (registrar su
+    // propia acción) y leer; no se puede editar ni borrar una entrada ya creada.
+    match /activity_log/{logId} {
+      allow read, create: if isApproved();
+      allow update, delete: if false;
+    }
+  }
+}
