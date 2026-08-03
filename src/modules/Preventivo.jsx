@@ -55,6 +55,20 @@ const PRIORITIES = [
   { value: "baja", label: "Baja", color: COLORS.green },
 ];
 
+function friendlyFirestoreError(err, action) {
+  console.error(`[Preventivo] Error al ${action}:`, err?.code, err?.message, err);
+  switch (err?.code) {
+    case "permission-denied":
+      return "No tienes permiso para esta acción. Puede que tu cuenta no esté aprobada aún, o que las reglas de Firestore no incluyan 'preventive_plans' (revisa que estén publicadas en la consola de Firebase).";
+    case "unavailable":
+      return "Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.";
+    case "unauthenticated":
+      return "Tu sesión expiró. Vuelve a iniciar sesión e inténtalo de nuevo.";
+    default:
+      return `No se pudo ${action} (${err?.code || "error desconocido"}). Revisa tu conexión y las reglas de Firestore.`;
+  }
+}
+
 const emptyForm = {
   machine: "",
   machineType: "envasadora",
@@ -115,7 +129,7 @@ export default function Preventivo({ user }) {
       logActivity(user.email, "Preventivo", "Eliminado", `${plan.machine}: ${plan.title}`);
       toast("Plan eliminado.");
     } catch (err) {
-      toast("No se pudo eliminar el plan.", "error");
+      toast(friendlyFirestoreError(err, "eliminar el plan"), "error");
     } finally {
       setConfirmDelete(null);
     }
@@ -159,7 +173,7 @@ export default function Preventivo({ user }) {
       logActivity(user.email, "Preventivo", "Orden generada", `${workOrder} · ${plan.machine}: ${plan.title}`);
       toast(`Orden ${workOrder} creada en Mantenimiento.`);
     } catch (err) {
-      toast("No se pudo generar la orden.", "error");
+      toast(friendlyFirestoreError(err, "generar la orden"), "error");
     }
   }
 
@@ -323,8 +337,9 @@ function PlanModal({ plan, user, onClose }) {
       onClose();
     } catch (err) {
       setSaving(false);
-      setError("No se pudo guardar el plan. Revisa tu conexión y las reglas de Firestore.");
-      toast("No se pudo guardar el plan.", "error");
+      const msg = friendlyFirestoreError(err, "guardar el plan");
+      setError(msg);
+      toast(msg, "error");
     }
   }
 
