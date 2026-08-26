@@ -606,3 +606,48 @@ Industrial". Ya está arreglado:
 Al instalar el próximo APK, verás el icono nuevo. Puede que tengas que
 **desinstalar la app vieja primero** para que Android no se quede con el
 icono en caché.
+
+---
+
+## Arreglo: el Resumen ya no se cuelga en silencio
+
+Si alguna de las colecciones que usa el Resumen falla al cargar (típicamente
+porque falta publicar el `firestore.rules` más reciente), antes se quedaba
+en "Cargando resumen…" para siempre sin explicar nada. Ahora, si tarda más
+de 10 segundos o hay un error real, muestra un mensaje claro diciendo qué
+falló.
+
+**Si te sale ese aviso ahora mismo**: ve a Firestore Database → Reglas →
+confirma que tienes publicado el `firestore.rules` de este mismo zip (incluye
+las colecciones `material_lots`, `material_movements` y `activity_log`).
+
+---
+
+## El mismo arreglo aplicado a toda la app
+
+Después de encontrar el problema del Resumen colgado en silencio, revisé
+todos los demás módulos y tenían el mismo fallo de fondo: si Firestore
+rechaza una carga (normalmente por reglas sin publicar), la pantalla se
+quedaba en "Cargando…" para siempre sin decir por qué. Ahora **todas** las
+pantallas (Mantenimiento, Materiales —incluyendo Movimiento/Kardex/Lotes—,
+Producción, Calidad, Historial y Aprobaciones) muestran el motivo exacto del
+fallo en vez de quedarse calladas.
+
+---
+
+## Aviso al abrir la app (no es push de verdad)
+
+Cada vez que alguien abre la app, se revisa automáticamente:
+
+- Mantenimiento: órdenes críticas activas y vencidas (solo si ve esa pestaña)
+- Calidad: incidencias críticas abiertas (solo si ve esa pestaña)
+- Materiales: bajo mínimo y caducando pronto (solo si ve esa pestaña)
+
+Si hay algo, sale una **notificación nativa de Android** con el resumen. La
+primera vez pedirá permiso para mostrar notificaciones — hay que aceptarlo.
+
+**Importante — esto NO es un push de verdad**: solo avisa en el momento de
+**abrir** la app, no llega si la tienes cerrada y algo se vuelve crítico
+mientras tanto. Un push real (que llegue con la app cerrada) necesita
+Firebase Cloud Functions, que exige el plan de pago Blaze (con tarjeta),
+igual que pasaba con Storage — por eso no lo hicimos así.
