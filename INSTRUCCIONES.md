@@ -671,3 +671,82 @@ Si el botón "Compartir" no podía abrir el selector nativo de Android (caso
 raro) y caía en copiar el texto al portapapeles, antes no pasaba nada visible
 — parecía que el botón no hacía nada. Ahora avisa con un mensaje si copió al
 portapapeles, o si no pudo hacer ninguna de las dos cosas.
+
+---
+
+## Arreglo: fotos que sí se subieron ya no se pierden si otra falla
+
+Si subías varias fotos a la vez y una a mitad fallaba (mala conexión, etc.),
+las que sí se habían subido correctamente antes se perdían — no quedaban
+guardadas en la orden/incidencia/material, aunque ya estuvieran en
+Cloudinary. Ahora, si eso pasa, se guardan igualmente las que sí llegaron a
+subirse, y el aviso te dice que faltan por reintentar las demás editando de
+nuevo.
+
+---
+
+## Arreglo: borrar algo que falla ya no se queda callado
+
+Si al confirmar "Eliminar" (tarea, material, orden, incidencia o cuenta en
+Aprobaciones) fallaba por algún motivo (conexión, permisos), el diálogo se
+quedaba abierto sin decir nada. Ahora avisa con un mensaje claro si no se
+pudo borrar, en los 5 sitios donde se puede eliminar algo.
+
+---
+
+## Mismo arreglo en los cambios de estado y en Aprobaciones
+
+Cambiar el estado de una orden/incidencia, o aprobar/revocar/cambiar la
+categoría de alguien en Aprobaciones, ahora también avisa con un mensaje
+claro si falla, en vez de simplemente volver al valor anterior sin explicar
+nada.
+
+---
+
+## Aviso sobre el límite de Historial
+
+El Historial siempre carga las últimas 200 acciones. Si usas el filtro de
+fechas y no aparece nada de un día antiguo, puede que ese día ya haya
+quedado fuera de esas 200 (no significa que no pasara nada) — ahora te lo
+avisa cuando usas el filtro de fechas.
+
+---
+
+## Exportar a PDF
+
+Cada módulo (Mantenimiento, Materiales, Producción, Calidad) tiene ahora un
+botón **PDF** junto al de **CSV**. Genera un informe con:
+
+- Cabecera con "Mixpak System" y una franja naranja de seguridad.
+- Título del informe, cuántos registros tiene, fecha/hora de generación y
+  quién lo generó.
+- Una tabla con los datos filtrados en ese momento (respeta la búsqueda y
+  los filtros activos, igual que el CSV).
+- Numeración de páginas si el informe ocupa más de una.
+
+No hace falta configurar nada — usa la librería `jspdf`, que se instala sola
+al compilar.
+
+---
+
+## Arreglo: el botón PDF que no hacía nada
+
+La causa era que jsPDF se cargaba de una forma (importación dinámica) que
+podía fallar en silencio dentro del WebView de Android, sin mostrar ningún
+error — por eso parecía que el botón no hacía nada. Se cambió a la forma
+estándar de cargar la librería, y si aun así falla por algo, ahora sale un
+aviso claro en vez de quedarse callado.
+
+---
+
+## Arreglo real de CSV y PDF: ahora guardan/comparten, no "descargan"
+
+La causa de que ninguno de los dos funcionara: intentaban "descargar" el
+archivo con el truco típico de una página web (un enlace invisible con
+`download`), y **eso no funciona dentro del WebView de una app Android
+empaquetada** — ahí no hay gestor de descargas escuchando.
+
+Ahora, tanto CSV como PDF generan el archivo y abren el **selector nativo de
+compartir** (lo mismo que usa el botón "Compartir"), para que elijas guardarlo
+en el dispositivo, enviarlo por WhatsApp, Gmail, etc. Usa el plugin
+`@capacitor/filesystem` (se instala solo, no hay que configurar nada).
