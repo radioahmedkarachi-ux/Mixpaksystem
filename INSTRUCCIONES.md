@@ -750,3 +750,23 @@ Ahora, tanto CSV como PDF generan el archivo y abren el **selector nativo de
 compartir** (lo mismo que usa el botón "Compartir"), para que elijas guardarlo
 en el dispositivo, enviarlo por WhatsApp, Gmail, etc. Usa el plugin
 `@capacitor/filesystem` (se instala solo, no hay que configurar nada).
+
+---
+
+## Firma digital
+
+Al abrir el detalle de una **orden de mantenimiento** o una **incidencia de
+calidad** que todavía no esté firmada, aparece un botón:
+
+- **"Firmar y completar"** (Mantenimiento) — abre un recuadro para firmar con
+  el dedo. Al guardar, la orden pasa automáticamente a "Completada" y queda
+  la firma (imagen), quién firmó y cuándo.
+- **"Firmar y cerrar"** (Calidad) — igual, pero pasa la incidencia a
+  "Cerrada".
+
+Una vez firmada, se ve la firma junto con el nombre y la fecha en el
+detalle, y ya no se puede volver a firmar desde ahí (para cambiar el estado
+después, se hace desde el desplegable normal como siempre).
+
+La firma se guarda como imagen en Cloudinary, igual que las fotos — no hace
+falta configurar nada más.
