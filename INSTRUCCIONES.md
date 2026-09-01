@@ -770,3 +770,26 @@ después, se hace desde el desplegable normal como siempre).
 
 La firma se guarda como imagen en Cloudinary, igual que las fotos — no hace
 falta configurar nada más.
+
+---
+
+## Código QR por máquina y material
+
+**Materiales**: cada tarjeta tiene un botón **"Ver código QR"** que genera un
+QR único de ese material (puedes compartirlo/imprimirlo y pegarlo en el
+estante o el propio repuesto). Arriba, el botón **"Escanear"** abre la
+cámara — al escanear el QR de un material, abre directamente su ficha para
+editar/ver.
+
+**Mantenimiento**: el botón **"QR máquina"** te deja escribir el nombre de
+una máquina y genera su QR (pégalo en la máquina física). El botón
+**"Escanear"** lee ese QR y filtra automáticamente la lista de órdenes por
+esa máquina, para ver su historial al instante.
+
+**Aviso importante:** la parte de *generar* el QR (`qrcode`) es sencilla y
+no debería dar problemas. La parte de *escanear* usa un plugin de cámara de
+Capacitor (`@capacitor/barcode-scanning`) que no he podido compilar ni
+probar yo mismo. Es muy posible que la primera vez que compiles falle o el
+escaneo no funcione a la primera — si pasa eso, mándame el error exacto de
+GitHub Actions (o de la app) y lo arreglamos con esa información, como
+hicimos antes con el PDF y el CSV.
