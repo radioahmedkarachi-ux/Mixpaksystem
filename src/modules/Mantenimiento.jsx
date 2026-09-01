@@ -1,0 +1,575 @@
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import {
+  collection,
+  onSnapshot,
+  addDoc,
+  updateDoc,
+  deleteDoc,
+  doc,
+  serverTimestamp,
+  query,
+  orderBy,
+} from "firebase/firestore";
+import { db } from "../firebase.js";
+import { uploadToCloudinary } from "../cloudinary.js";
+import FotoViewer from "../FotoViewer.jsx";
+import SignaturePad from "../SignaturePad.jsx";
+import QrModal from "../QrModal.jsx";
+import { scanQr } from "../qrscanner.js";
+import {
+  Wrench,
+  AlertTriangle,
+  Clock,
+  CheckCircle2,
+  Plus,
+  Package,
+  Trash2,
+  PackageSearch,
+  ClipboardList,
+  Camera,
+  Image as ImageIcon,
+  Search,
+  Download,
+  Share2,
+  Pencil,
+  FileText,
+  PenLine,
+  QrCode,
+  ScanLine,
+} from "lucide-react";
+import {
+  COLORS,
+  inputStyle,
+  selectStyle,
+  primaryButtonStyle,
+  ghostButtonStyle,
+  compressImage,
+  withTimeout,
+  exportToCsv,
+  exportToPdf,
+  shareText,
+  logActivity,
+  DateRangeFilter,
+  inDateRange,
+  CenteredMessage,
+  Field,
+  ModalShell,
+  ConfirmDialog,
+  StatCard,
+  EmptyState,
+} from "../shared.jsx";
+
+const MACHINE_TYPES = [
+  { value: "envasadora", label: "Envasadora" },
+  { value: "llenadora", label: "Llenadora" },
+  { value: "etiquetadora", label: "Etiquetadora" },
+  { value: "paletizadora", label: "Paletizadora" },
+  { value: "compresor", label: "Compresor" },
+  { value: "banda", label: "Banda transportadora" },
+  { value: "otro", label: "Otro equipo" },
+];
+
+const PRIORITIES = [
+  { value: "critica", label: "Crítica", color: COLORS.critical },
+  { value: "alta", label: "Alta", color: COLORS.safety },
+  { value: "media", label: "Media", color: COLORS.steel },
+  { value: "baja", label: "Baja", color: COLORS.green },
+];
+
+const STATUSES = [
+  { value: "pendiente", label: "Pendiente", icon: Clock },
+  { value: "en_progreso", label: "En progreso", icon: Wrench },
+  { value: "espera_repuesto", label: "Esperando repuesto", icon: PackageSearch },
+  { value: "completada", label: "Completada", icon: CheckCircle2 },
+];
+
+const emptyForm = {
+  machine: "",
+  machineType: "envasadora",
+  title: "",
+  description: "",
+  priority: "media",
+  status: "pendiente",
+  dueDate: "",
+};
+
+function priorityMeta(v) {
+  return PRIORITIES.find((p) => p.value === v) || PRIORITIES[2];
+}
+function machineLabel(v) {
+  return MACHINE_TYPES.find((m) => m.value === v)?.label || v;
+}
+
+export default function Mantenimiento({ user }) {
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [modalOpen, setModalOpen] = useState(false);
+  const [detailTask, setDetailTask] = useState(null);
+  const [editTask, setEditTask] = useState(null);
+  const [qrMachine, setQrMachine] = useState(null);
+  const [filterType, setFilterType] = useState("todos");
+  const [filterPriority, setFilterPriority] = useState("todas");
+  const [search, setSearch] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  useEffect(() => {
+    const q = query(collection(db, "tasks"), orderBy("createdAt", "desc"));
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        setTasks(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+        setLoading(false);
+      },
+      (err) => setLoadError(`No se pudo cargar Mantenimiento (${err.code || err.message}). Revisa que hayas publicado el firestore.rules más reciente.`)
+    );
+    return unsub;
+  }, []);
+
+  async function updateStatus(task, status) {
+    try {
+      await updateDoc(doc(db, "tasks", task.id), { status });
+      logActivity(user.email, "Mantenimiento", "Cambio de estado", `${task.workOrder} (${task.title}): ${task.status} → ${status}`);
+    } catch (err) {
+      alert("No se pudo cambiar el estado. Revisa tu conexión e inténtalo de nuevo.");
+    }
+  }
+
+  async function removeTask(task) {
+    try {
+      // Nota: las fotos quedan en Cloudinary (borrar requiere un backend con la
+      // clave secreta), pero el registro de la tarea sí se elimina.
+      await deleteDoc(doc(db, "tasks", task.id));
+      logActivity(user.email, "Mantenimiento", "Eliminada", `${task.workOrder}: ${task.title}`);
+      setConfirmDelete(null);
+    } catch (err) {
+      alert("No se pudo eliminar la tarea. Revisa tu conexión e inténtalo de nuevo.");
+    }
+  }
+
+  function handleGenerateMachineQr() {
+    const name = window.prompt("Nombre exacto de la máquina para generar su QR (pégalo físicamente en ella):");
+    if (name && name.trim()) setQrMachine(name.trim());
+  }
+
+  async function handleScan() {
+    const value = await scanQr();
+    if (!value) return;
+    const name = value.startsWith("machine:") ? value.slice("machine:".length) : value;
+    setSearch(name);
+  }
+
+  const filtered = useMemo(() => {
+    return tasks.filter((t) => {
+      if (filterType !== "todos" && t.machineType !== filterType) return false;
+      if (filterPriority !== "todas" && t.priority !== filterPriority) return false;
+      if (!inDateRange(t.createdAt, dateFrom, dateTo)) return false;
+      if (search && !`${t.machine} ${t.title} ${t.description || ""} ${t.workOrder || ""}`.toLowerCase().includes(search.toLowerCase())) return false;
+      return true;
+    });
+  }, [tasks, filterType, filterPriority, search, dateFrom, dateTo]);
+
+  const stats = useMemo(() => {
+    const s = { pendiente: 0, en_progreso: 0, espera_repuesto: 0, completada: 0, critica: 0, vencida: 0 };
+    const today = new Date().toISOString().slice(0, 10);
+    tasks.forEach((t) => {
+      s[t.status] = (s[t.status] || 0) + 1;
+      if (t.priority === "critica" && t.status !== "completada") s.critica++;
+      if (t.dueDate && t.status !== "completada" && t.dueDate < today) s.vencida++;
+    });
+    return s;
+  }, [tasks]);
+
+  const columns = STATUSES.map((s) => ({
+    ...s,
+    items: filtered
+      .filter((t) => t.status === s.value)
+      .sort((a, b) => {
+        const order = { critica: 0, alta: 1, media: 2, baja: 3 };
+        return order[a.priority] - order[b.priority];
+      }),
+  }));
+
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 18 }}>
+        <h1 style={{ fontFamily: "'Oswald', sans-serif", fontWeight: 700, fontSize: 20, textTransform: "uppercase", margin: 0 }}>
+          Órdenes de mantenimiento
+        </h1>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleScan} style={ghostButtonStyle}>
+            <ScanLine size={16} /> Escanear
+          </button>
+          <button onClick={handleGenerateMachineQr} style={ghostButtonStyle}>
+            <QrCode size={16} /> QR máquina
+          </button>
+          <button onClick={() => { setEditTask(null); setModalOpen(true); }} style={primaryButtonStyle}>
+            <Plus size={16} /> Nueva
+          </button>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 20 }}>
+        <StatCard label="Pendientes" value={stats.pendiente} color={COLORS.steel} Icon={Clock} />
+        <StatCard label="En progreso" value={stats.en_progreso} color={COLORS.safety} Icon={Wrench} />
+        <StatCard label="Esperando repuesto" value={stats.espera_repuesto} color={COLORS.textMuted} Icon={PackageSearch} />
+        <StatCard label="Completadas" value={stats.completada} color={COLORS.green} Icon={CheckCircle2} />
+        <StatCard label="Críticas activas" value={stats.critica} color={COLORS.critical} Icon={AlertTriangle} />
+        <StatCard label="Vencidas" value={stats.vencida} color={COLORS.critical} Icon={AlertTriangle} />
+      </div>
+
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 18, alignItems: "center" }}>
+        <div style={{ position: "relative", flex: "1 1 200px" }}>
+          <Search size={14} color={COLORS.textMuted} style={{ position: "absolute", left: 9, top: 11 }} />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Buscar por máquina, tarea u OT" style={{ ...inputStyle, paddingLeft: 30 }} />
+        </div>
+        <select value={filterType} onChange={(e) => setFilterType(e.target.value)} style={selectStyle}>
+          <option value="todos">Todas las máquinas</option>
+          {MACHINE_TYPES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+        </select>
+        <select value={filterPriority} onChange={(e) => setFilterPriority(e.target.value)} style={selectStyle}>
+          <option value="todas">Toda prioridad</option>
+          {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+        </select>
+        <DateRangeFilter from={dateFrom} to={dateTo} onFromChange={setDateFrom} onToChange={setDateTo} />
+        <button
+          onClick={() => exportToCsv("ordenes-mantenimiento", filtered.map((t) => ({
+            OT: t.workOrder, maquina: t.machine, tipo: machineLabel(t.machineType), tarea: t.title,
+            prioridad: t.priority, estado: t.status, tecnico: t.technician, vence: t.dueDate || "",
+          })))}
+          style={ghostButtonStyle}
+          title="Exportar CSV"
+        >
+          <Download size={16} /> CSV
+        </button>
+        <button
+          onClick={() => exportToPdf({
+            filename: "ordenes-mantenimiento",
+            title: "Órdenes de mantenimiento",
+            subtitle: `${filtered.length} orden(es)`,
+            userEmail: user.email,
+            rows: filtered.map((t) => ({
+              OT: t.workOrder, Máquina: t.machine, Tipo: machineLabel(t.machineType), Tarea: t.title,
+              Prioridad: t.priority, Estado: t.status, Técnico: t.technician, Vence: t.dueDate || "",
+            })),
+          })}
+          style={ghostButtonStyle}
+          title="Exportar PDF"
+        >
+          <FileText size={16} /> PDF
+        </button>
+      </div>
+
+      {loading ? (
+        <CenteredMessage text={loadError || "Cargando tareas…"} />
+      ) : tasks.length === 0 ? (
+        <EmptyState Icon={ClipboardList} title="Sin órdenes todavía" message="Registra la primera tarea de mantenimiento para empezar." onAdd={() => { setEditTask(null); setModalOpen(true); }} addLabel="Crear primera tarea" />
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(270px, 1fr))", gap: 16 }}>
+          {columns.map((col) => (
+            <div key={col.value}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, paddingBottom: 8, borderBottom: `2px solid ${COLORS.dark}` }}>
+                <col.icon size={15} />
+                <h2 style={{ fontFamily: "'Oswald', sans-serif", fontSize: 13, textTransform: "uppercase", margin: 0 }}>{col.label}</h2>
+                <span style={{ marginLeft: "auto", fontFamily: "'IBM Plex Mono', monospace", fontSize: 12, color: COLORS.textMuted }}>{col.items.length}</span>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {col.items.map((t) => (
+                  <TaskCard key={t.id} task={t} onStatusChange={(s) => updateStatus(t, s)} onDelete={() => setConfirmDelete(t)} onOpen={() => setDetailTask(t)} />
+                ))}
+                {col.items.length === 0 && <div style={{ fontSize: 12, color: COLORS.textMuted, fontStyle: "italic" }}>Sin tareas aquí.</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {modalOpen && <TaskModal user={user} task={editTask} onClose={() => { setModalOpen(false); setEditTask(null); }} />}
+      {qrMachine && (
+        <QrModal
+          title={`QR · ${qrMachine}`}
+          label={qrMachine}
+          value={`machine:${qrMachine}`}
+          onClose={() => setQrMachine(null)}
+        />
+      )}
+      {detailTask && (
+        <DetailModal
+          task={detailTask}
+          user={user}
+          onClose={() => setDetailTask(null)}
+          onEdit={() => { setEditTask(detailTask); setDetailTask(null); setModalOpen(true); }}
+        />
+      )}
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Eliminar tarea"
+          message="Esto borrará la orden y sus fotos. No se puede deshacer."
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => removeTask(confirmDelete)}
+        />
+      )}
+    </div>
+  );
+}
+
+function TaskCard({ task, onStatusChange, onDelete, onOpen }) {
+  const pr = priorityMeta(task.priority);
+  const isCritical = task.priority === "critica" && task.status !== "completada";
+  const isOverdue = task.dueDate && task.status !== "completada" && task.dueDate < new Date().toISOString().slice(0, 10);
+  return (
+    <div style={{ background: COLORS.panel, borderLeft: `5px solid ${isOverdue ? COLORS.critical : pr.color}`, boxShadow: isCritical || isOverdue ? `0 0 0 1px ${COLORS.critical}` : "none", padding: "12px 14px" }}>
+      <div style={{ display: "flex", justifyContent: "space-between" }}>
+        <span style={{ fontFamily: "'IBM Plex Mono', monospace", fontSize: 11, color: COLORS.textMuted }}>{task.workOrder}</span>
+        <button onClick={onDelete} style={{ background: "none", border: "none", cursor: "pointer", color: COLORS.textMuted }}><Trash2 size={14} /></button>
+      </div>
+      <h3 onClick={onOpen} style={{ fontSize: 15, fontWeight: 600, margin: "6px 0 2px", cursor: "pointer" }}>{task.title}</h3>
+      <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: COLORS.textMuted, marginBottom: 6 }}>
+        <Package size={13} /> <span>{task.machine} · {machineLabel(task.machineType)}</span>
+      </div>
+      {isOverdue && (
+        <div style={{ display: "flex", alignItems: "center", gap: 5, color: COLORS.critical, fontSize: 12, fontWeight: 700, marginBottom: 6 }}>
+          <AlertTriangle size={13} /> Vencida ({task.dueDate})
+        </div>
+      )}
+      {task.photos?.length > 0 && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 8, overflowX: "auto" }}>
+          {task.photos.slice(0, 3).map((p, i) => (
+            <img key={i} src={p.url} alt="" onClick={onOpen} style={{ width: 52, height: 52, objectFit: "cover", cursor: "pointer" }} />
+          ))}
+          {task.photos.length > 3 && (
+            <div onClick={onOpen} style={{ width: 52, height: 52, background: COLORS.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer" }}>
+              +{task.photos.length - 3}
+            </div>
+          )}
+        </div>
+      )}
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+        <span style={{ fontSize: 11, textTransform: "uppercase", fontWeight: 600, color: "#fff", background: pr.color, padding: "2px 8px" }}>{pr.label}</span>
+        {task.technician && <span style={{ fontSize: 12, color: COLORS.textMuted }}>Técnico: {task.technician}</span>}
+        {task.dueDate && <span style={{ fontSize: 12, color: COLORS.textMuted }}>· Vence: {task.dueDate}</span>}
+      </div>
+      <select value={task.status} onChange={(e) => onStatusChange(e.target.value)} style={{ ...selectStyle, width: "100%", fontSize: 12, padding: "6px 8px" }}>
+        {STATUSES.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function TaskModal({ user, task, onClose }) {
+  const [form, setForm] = useState(task ? { ...emptyForm, ...task } : emptyForm);
+  const [files, setFiles] = useState([]);
+  const [previews, setPreviews] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState("");
+  const [error, setError] = useState("");
+  const fileInputRef = useRef(null);
+
+  function handleFiles(e) {
+    const list = Array.from(e.target.files || []);
+    setFiles((f) => [...f, ...list]);
+    setPreviews((p) => [...p, ...list.map((f) => URL.createObjectURL(f))]);
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!form.machine.trim() || !form.title.trim()) return;
+    setSaving(true);
+    setError("");
+    let docId = task?.id;
+    try {
+      if (task) {
+        const { id, workOrder, photos, technician, createdBy, createdAt, ...rest } = form;
+        await updateDoc(doc(db, "tasks", task.id), rest);
+        logActivity(user.email, "Mantenimiento", "Editada", `${task.workOrder}: ${form.title}`);
+      } else {
+        const workOrder = `OT-${new Date().getFullYear()}-${String(Date.now()).slice(-5)}`;
+        const docRef = await addDoc(collection(db, "tasks"), {
+          ...form,
+          workOrder,
+          technician: user.email,
+          createdBy: user.uid,
+          createdAt: serverTimestamp(),
+          photos: [],
+        });
+        docId = docRef.id;
+        logActivity(user.email, "Mantenimiento", "Creada", `${workOrder}: ${form.title} (${form.machine})`);
+      }
+    } catch (err) {
+      setSaving(false);
+      setError("No se pudo guardar la orden. Revisa tu conexión y las reglas de Firestore.");
+      return;
+    }
+
+    if (files.length) {
+      const uploaded = [...(task?.photos || [])];
+      try {
+        for (let i = 0; i < files.length; i++) {
+          setUploadStatus(`Subiendo foto ${i + 1} de ${files.length}…`);
+          const blob = await withTimeout(compressImage(files[i]), 15000, "La foto tardó demasiado en procesarse.");
+          const result = await withTimeout(uploadToCloudinary(blob, `tasks/${docId}`), 20000, "La subida de la foto tardó demasiado.");
+          uploaded.push(result);
+        }
+        setUploadStatus("Guardando enlaces de las fotos…");
+        await updateDoc(doc(db, "tasks", docId), { photos: uploaded });
+      } catch (err) {
+        setSaving(false);
+        setUploadStatus("");
+        // Guarda las fotos que sí llegaron a subirse antes del fallo, para no perderlas.
+        if (uploaded.length > (task?.photos || []).length) {
+          await updateDoc(doc(db, "tasks", docId), { photos: uploaded }).catch(() => {});
+        }
+        setError("La orden se guardó, pero no todas las fotos se pudieron subir a Cloudinary (las que sí subieron se guardaron). Revisa el cloud name y el upload preset en src/cloudinary.js.");
+        return;
+      }
+    }
+    setSaving(false);
+    setUploadStatus("");
+    onClose();
+  }
+
+  return (
+    <ModalShell onClose={onClose} title={task ? "Editar orden de trabajo" : "Nueva orden de trabajo"}>
+      <form onSubmit={submit}>
+        <Field label="Máquina / equipo *">
+          <input required value={form.machine} onChange={(e) => setForm({ ...form, machine: e.target.value })} style={inputStyle} placeholder="Ej. Envasadora línea 3" />
+        </Field>
+        <Field label="Tipo de máquina">
+          <select value={form.machineType} onChange={(e) => setForm({ ...form, machineType: e.target.value })} style={inputStyle}>
+            {MACHINE_TYPES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Tarea *">
+          <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} style={inputStyle} placeholder="Ej. Cambio de rodamiento" />
+        </Field>
+        <Field label="Descripción">
+          <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} style={{ ...inputStyle, resize: "vertical" }} />
+        </Field>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          <Field label="Prioridad">
+            <select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} style={inputStyle}>
+              {PRIORITIES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+            </select>
+          </Field>
+          <Field label="Fecha límite">
+            <input type="date" value={form.dueDate} onChange={(e) => setForm({ ...form, dueDate: e.target.value })} style={inputStyle} />
+          </Field>
+        </div>
+
+        <Field label="Fotos (máquina o avería)">
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+            {(task?.photos || []).map((p, i) => <img key={`ex-${i}`} src={p.url} style={{ width: 60, height: 60, objectFit: "cover" }} />)}
+            {previews.map((src, i) => <img key={i} src={src} style={{ width: 60, height: 60, objectFit: "cover" }} />)}
+            <button type="button" onClick={() => fileInputRef.current.click()} style={{ width: 60, height: 60, border: `1px dashed ${COLORS.line}`, background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <Camera size={20} color={COLORS.textMuted} />
+            </button>
+          </div>
+          <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={handleFiles} style={{ display: "none" }} />
+        </Field>
+
+        <button type="submit" disabled={saving} style={{ ...primaryButtonStyle, width: "100%", justifyContent: "center", marginTop: 8 }}>
+          {uploadStatus || (saving ? "Guardando…" : task ? "Guardar cambios" : "Guardar orden")}
+        </button>
+        {error && <p style={{ color: COLORS.critical, fontSize: 13, marginTop: 10 }}>{error}</p>}
+      </form>
+    </ModalShell>
+  );
+}
+
+function DetailModal({ task, user, onClose, onEdit }) {
+  const pr = priorityMeta(task.priority);
+  const [viewerIndex, setViewerIndex] = useState(null);
+  const [showSignature, setShowSignature] = useState(false);
+  const [signing, setSigning] = useState(false);
+
+  async function share() {
+    const lines = [
+      `Orden ${task.workOrder}: ${task.title}`,
+      `Máquina: ${task.machine} (${machineLabel(task.machineType)})`,
+      `Prioridad: ${pr.label} · Estado: ${task.status}`,
+      task.description ? `Descripción: ${task.description}` : null,
+      task.dueDate ? `Vence: ${task.dueDate}` : null,
+      task.photos?.length ? `Fotos: ${task.photos.map((p) => p.url).join(" ")}` : null,
+      task.signature ? `Firmado por: ${task.signature.signedBy}` : null,
+    ].filter(Boolean).join("\n");
+    const result = await shareText(task.workOrder, lines);
+    if (result === "copied") alert("No se pudo abrir el selector de compartir — se copió el texto al portapapeles.");
+    if (result === "failed") alert("No se pudo compartir ni copiar el texto.");
+  }
+
+  async function handleSign(blob) {
+    setSigning(true);
+    try {
+      const result = await withTimeout(uploadToCloudinary(blob, `signatures/tasks/${task.id}`), 20000, "La firma tardó demasiado en subirse.");
+      await updateDoc(doc(db, "tasks", task.id), {
+        status: "completada",
+        signature: { url: result.url, signedBy: user.email, signedAt: new Date().toISOString() },
+      });
+      logActivity(user.email, "Mantenimiento", "Firmada y completada", `${task.workOrder}: ${task.title}`);
+      setShowSignature(false);
+    } catch (err) {
+      alert("No se pudo guardar la firma. Revisa tu conexión e inténtalo de nuevo.");
+    } finally {
+      setSigning(false);
+    }
+  }
+
+  return (
+    <ModalShell onClose={onClose} title={task.workOrder}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+        <h2 style={{ fontSize: 18, margin: "0 0 6px" }}>{task.title}</h2>
+        <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+          <button onClick={onEdit} style={{ background: "none", border: `1px solid ${COLORS.line}`, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <Pencil size={14} /> Editar
+          </button>
+          <button onClick={share} style={{ background: "none", border: `1px solid ${COLORS.line}`, padding: "6px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+            <Share2 size={14} /> Compartir
+          </button>
+        </div>
+      </div>
+      <p style={{ color: COLORS.textMuted, fontSize: 13, margin: "0 0 10px" }}>{task.machine} · {machineLabel(task.machineType)}</p>
+      <span style={{ fontSize: 11, textTransform: "uppercase", fontWeight: 600, color: "#fff", background: pr.color, padding: "2px 8px" }}>{pr.label}</span>
+      {task.description && <p style={{ fontSize: 14, marginTop: 12 }}>{task.description}</p>}
+      {task.photos?.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: 8, marginTop: 14 }}>
+          {task.photos.map((p, i) => (
+            <button key={i} onClick={() => setViewerIndex(i)} style={{ padding: 0, border: "none", background: "none", cursor: "pointer" }}>
+              <img src={p.url} style={{ width: "100%", aspectRatio: "1", objectFit: "cover" }} />
+            </button>
+          ))}
+        </div>
+      )}
+      {!task.photos?.length && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, color: COLORS.textMuted, fontSize: 13, marginTop: 14 }}>
+          <ImageIcon size={16} /> Sin fotos adjuntas
+        </div>
+      )}
+
+      <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${COLORS.line}` }}>
+        {task.signature ? (
+          <div>
+            <div style={{ fontSize: 11, textTransform: "uppercase", color: COLORS.textMuted, fontWeight: 600, marginBottom: 6 }}>Firmado por</div>
+            <img src={task.signature.url} alt="Firma" style={{ height: 60, background: "#fff", border: `1px solid ${COLORS.line}` }} />
+            <p style={{ fontSize: 12, color: COLORS.textMuted, margin: "4px 0 0" }}>{task.signature.signedBy} · {new Date(task.signature.signedAt).toLocaleString("es-ES")}</p>
+          </div>
+        ) : (
+          <button onClick={() => setShowSignature(true)} style={{ ...primaryButtonStyle, width: "100%", justifyContent: "center" }}>
+            <PenLine size={16} /> Firmar y completar
+          </button>
+        )}
+      </div>
+
+      {viewerIndex !== null && <FotoViewer photos={task.photos} startIndex={viewerIndex} onClose={() => setViewerIndex(null)} />}
+      {showSignature && (
+        <SignaturePad
+          title={`Firmar orden ${task.workOrder}`}
+          onCancel={() => setShowSignature(false)}
+          onSave={handleSign}
+        />
+      )}
+      {signing && <div style={{ position: "fixed", inset: 0, background: "rgba(24,27,30,0.6)", zIndex: 110, display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>Guardando firma…</div>}
+    </ModalShell>
+  );
+}
