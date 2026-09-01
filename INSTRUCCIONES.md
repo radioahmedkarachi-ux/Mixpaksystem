@@ -793,3 +793,18 @@ probar yo mismo. Es muy posible que la primera vez que compiles falle o el
 escaneo no funcione a la primera — si pasa eso, mándame el error exacto de
 GitHub Actions (o de la app) y lo arreglamos con esa información, como
 hicimos antes con el PDF y el CSV.
+
+---
+
+## Arreglo del escaneo: paquete correcto
+
+El paquete que puse antes (`@capacitor/barcode-scanning`) no existe — por
+eso falló "Instalar dependencias" en GitHub Actions. El correcto es
+**`@capacitor-mlkit/barcode-scanning`**, que además usa el escáner ya
+integrado de Google (no hace falta tocar el manifiesto de Android a mano,
+cosa que sí pedía el plugin oficial que había probado primero).
+
+Si al compilar con este cambio sigue fallando "Instalar dependencias" con
+un error parecido (paquete/versión no encontrada), mándame el error exacto
+y ajusto la versión — puede que la versión "^6.1.0" que puse no sea
+exactamente la que existe publicada.
